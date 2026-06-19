@@ -8,25 +8,22 @@ import WordToolbar from './WordToolbar';
 import PageCanvas from './PageCanvas';
 import PageTabs from './PageTabs';
 
-export default function EditorShell() {
+type Props = {
+  documentId?: string;
+};
+
+export default function EditorShell({ documentId }: Props) {
   useEffect(() => {
-    initializeStore();
-  }, []);
+    initializeStore(documentId);
+  }, [documentId]);
 
   useKeyboardShortcuts();
 
   return (
     <div className="h-screen flex flex-col bg-white overflow-hidden">
-      {/* App bar — title, save, file menu */}
       <Header />
-
-      {/* Main toolbar — insert + contextual format/block controls */}
       <WordToolbar />
-
-      {/* Page tabs (only visible when > 1 page) */}
       <PageTabs />
-
-      {/* Canvas — takes all remaining space */}
       <PageCanvas />
     </div>
   );

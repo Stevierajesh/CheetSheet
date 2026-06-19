@@ -1,28 +1,62 @@
 'use client';
 
 import React, { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { v4 as uuid } from 'uuid';
 import { useEditorStore } from '@/lib/document/store';
-import { exportDocumentJSON, importDocumentJSON } from '@/lib/storage/localStorage';
+import {
+  exportDocumentJSON,
+  importDocumentJSON,
+  saveDocument as saveDocToStorage,
+} from '@/lib/storage/localStorage';
 import { exportToPDF } from '@/lib/export/pdf';
+import { DocumentModel } from '@/types/document';
 
 export default function Header() {
-  const { document, setTitle, newDocument, undo, save } = useEditorStore();
+  const { document, setTitle, undo, save } = useEditorStore();
   const [fileOpen, setFileOpen] = useState(false);
+  const router = useRouter();
+
+  const handleNew = () => {
+    // Save current doc first, then navigate to a new blank doc
+    save();
+    const now = new Date().toISOString();
+    const doc: DocumentModel = {
+      id: uuid(),
+      title: 'Untitled Document',
+      createdAt: now,
+      updatedAt: now,
+      pages: [
+        { id: uuid(), size: 'letter-portrait', backgroundColor: '#ffffff', blocks: [] },
+      ],
+    };
+    saveDocToStorage(doc);
+    router.push(`/editor/${doc.id}`);
+  };
 
   const handleImport = async () => {
     try {
       const doc = await importDocumentJSON();
-      useEditorStore.getState().setDocument(doc);
+      doc.id = uuid();
+      doc.updatedAt = new Date().toISOString();
+      saveDocToStorage(doc);
+      router.push(`/editor/${doc.id}`);
     } catch {}
     setFileOpen(false);
   };
 
   return (
     <header className="flex items-center gap-3 px-4 py-1.5 bg-white border-b border-gray-300 min-h-[40px] shrink-0">
-      {/* App name */}
-      <h1 className="text-base font-bold text-gray-900 shrink-0">MVP</h1>
+      {/* Home link */}
+      <button
+        onClick={() => { save(); router.push('/'); }}
+        className="text-base font-bold text-gray-900 shrink-0 hover:text-blue-600 transition-colors"
+        title="Back to documents"
+      >
+        CheetSheet
+      </button>
 
-      {/* File controls — left side */}
+      {/* File controls */}
       <div className="flex items-center gap-1">
         <button
           onClick={save}
@@ -32,9 +66,7 @@ export default function Header() {
           Save
         </button>
         <button
-          onClick={() => {
-            if (confirm('Start a new document? Unsaved changes will be lost.')) newDocument();
-          }}
+          onClick={handleNew}
           className="px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 rounded border border-gray-200"
         >
           New

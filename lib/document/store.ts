@@ -9,7 +9,7 @@ import {
   PageSize,
   BulletStyle,
 } from '@/types/document';
-import { saveDocument, loadDocument } from '@/lib/storage/localStorage';
+import { saveDocument, loadDocumentById, migrateLegacyDocument } from '@/lib/storage/localStorage';
 import { createSeedDocument } from './seed';
 
 type HistoryEntry = {
@@ -536,13 +536,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 }));
 
-// Initialize from localStorage
-export function initializeStore() {
-  const saved = loadDocument();
-  if (saved) {
-    useEditorStore.getState().setDocument(saved);
-  } else {
-    const seed = createSeedDocument();
-    useEditorStore.getState().setDocument(seed);
+// Initialize from localStorage — loads a specific document by ID
+export function initializeStore(documentId?: string) {
+  migrateLegacyDocument();
+  if (documentId) {
+    const doc = loadDocumentById(documentId);
+    if (doc) {
+      useEditorStore.getState().setDocument(doc);
+      return;
+    }
   }
+  // Fallback: create a new document
+  const doc = createNewDocument();
+  useEditorStore.getState().setDocument(doc);
 }
