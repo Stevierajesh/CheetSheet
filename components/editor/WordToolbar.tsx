@@ -2,6 +2,7 @@
 
 import React, { useRef, useEffect, useState } from 'react';
 import { useEditorStore } from '@/lib/document/store';
+import { uploadImage } from '@/lib/storage/supabase';
 import { BlockModel, BlockType, PageSize, BulletStyle } from '@/types/document';
 
 // ── tiny shared primitives ────────────────────────────────────────────────────
@@ -231,12 +232,20 @@ function BlockGroup({ block }: { block: BlockModel }) {
     }
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => updateBlock(block.id, { src: reader.result as string } as Partial<BlockModel>);
-    reader.readAsDataURL(file);
+    try {
+      const url = await uploadImage(file);
+      updateBlock(block.id, { src: url } as Partial<BlockModel>);
+    } catch (err) {
+      // Upload failed (offline?) — fall back to inline base64 so the user
+      // isn't blocked; it still saves inside the document JSON.
+      console.warn('Image upload failed, embedding as base64:', err);
+      const reader = new FileReader();
+      reader.onload = () => updateBlock(block.id, { src: reader.result as string } as Partial<BlockModel>);
+      reader.readAsDataURL(file);
+    }
   };
 
   return (

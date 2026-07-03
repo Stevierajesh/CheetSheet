@@ -3,23 +3,30 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { v4 as uuid } from 'uuid';
-import { useEditorStore } from '@/lib/document/store';
+import { useEditorStore, flushPendingSave } from '@/lib/document/store';
 import {
   exportDocumentJSON,
   importDocumentJSON,
-  saveDocument as saveDocToStorage,
 } from '@/lib/storage/localStorage';
+import { saveDocument as saveDocToCloud } from '@/lib/storage/supabase';
 import { exportToPDF } from '@/lib/export/pdf';
 import { DocumentModel } from '@/types/document';
 
+const SAVE_STATUS_LABEL = {
+  idle: '',
+  saving: 'Saving…',
+  saved: 'Saved',
+  error: 'Save failed — retrying on next change',
+} as const;
+
 export default function Header() {
-  const { document, setTitle, undo, save } = useEditorStore();
+  const { document, setTitle, undo, save, saveStatus } = useEditorStore();
   const [fileOpen, setFileOpen] = useState(false);
   const router = useRouter();
 
-  const handleNew = () => {
+  const handleNew = async () => {
     // Save current doc first, then navigate to a new blank doc
-    save();
+    await flushPendingSave();
     const now = new Date().toISOString();
     const doc: DocumentModel = {
       id: uuid(),
@@ -30,7 +37,7 @@ export default function Header() {
         { id: uuid(), size: 'letter-portrait', backgroundColor: '#ffffff', blocks: [] },
       ],
     };
-    saveDocToStorage(doc);
+    await saveDocToCloud(doc);
     router.push(`/editor/${doc.id}`);
   };
 
@@ -39,7 +46,7 @@ export default function Header() {
       const doc = await importDocumentJSON();
       doc.id = uuid();
       doc.updatedAt = new Date().toISOString();
-      saveDocToStorage(doc);
+      await saveDocToCloud(doc);
       router.push(`/editor/${doc.id}`);
     } catch {}
     setFileOpen(false);
@@ -111,6 +118,15 @@ export default function Header() {
         className="text-sm text-gray-700 border border-transparent hover:border-gray-300 focus:border-gray-400 rounded px-2 py-0.5 outline-none bg-transparent w-40 md:w-64 truncate mx-auto"
         placeholder="Untitled Document"
       />
+
+      {/* Save status */}
+      <span
+        className={`text-xs shrink-0 ${
+          saveStatus === 'error' ? 'text-red-500' : 'text-gray-400'
+        }`}
+      >
+        {SAVE_STATUS_LABEL[saveStatus]}
+      </span>
 
       {/* Undo — right side */}
       <button

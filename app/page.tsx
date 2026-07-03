@@ -4,12 +4,14 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { v4 as uuid } from 'uuid';
 import {
-  loadAllDocuments,
+  listDocumentSummaries,
   saveDocument,
   deleteDocument,
-  importDocumentJSON,
-  migrateLegacyDocument,
-} from '@/lib/storage/localStorage';
+  migrateLocalDocsToCloud,
+  DocumentSummary,
+} from '@/lib/storage/supabase';
+import { importDocumentJSON } from '@/lib/storage/localStorage';
+import { createClient } from '@/lib/supabase/client';
 import { DocumentModel } from '@/types/document';
 
 function formatDate(iso: string): string {
@@ -28,20 +30,40 @@ function formatDate(iso: string): string {
 
 export default function HomePage() {
   const router = useRouter();
-  const [docs, setDocs] = useState<DocumentModel[]>([]);
+  const [docs, setDocs] = useState<DocumentSummary[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [email, setEmail] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
-  const refresh = useCallback(() => {
-    migrateLegacyDocument();
-    setDocs(loadAllDocuments());
-    setLoaded(true);
+  const refresh = useCallback(async () => {
+    try {
+      await migrateLocalDocsToCloud().catch(() => {});
+      setDocs(await listDocumentSummaries());
+      setError(null);
+    } catch {
+      setError('Could not load your documents. Check your connection and try again.');
+    } finally {
+      setLoaded(true);
+    }
   }, []);
 
   useEffect(() => {
     refresh();
+    const supabase = createClient();
+    supabase.auth.getClaims().then(({ data }) => {
+      const claims = data?.claims;
+      setEmail((claims?.email as string) ?? null);
+      setIsAdmin((claims?.app_metadata as { role?: string } | undefined)?.role === 'admin');
+    });
   }, [refresh]);
 
-  const createNew = () => {
+  const signOut = async () => {
+    await createClient().auth.signOut();
+    window.location.assign('/login');
+  };
+
+  const createNew = async () => {
     const now = new Date().toISOString();
     const doc: DocumentModel = {
       id: uuid(),
@@ -57,14 +79,14 @@ export default function HomePage() {
         },
       ],
     };
-    saveDocument(doc);
+    await saveDocument(doc);
     router.push(`/editor/${doc.id}`);
   };
 
-  const handleDelete = (e: React.MouseEvent, id: string) => {
+  const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     if (!confirm('Delete this document? This cannot be undone.')) return;
-    deleteDocument(id);
+    await deleteDocument(id);
     refresh();
   };
 
@@ -74,7 +96,7 @@ export default function HomePage() {
       // Give it a fresh ID so it doesn't collide
       doc.id = uuid();
       doc.updatedAt = new Date().toISOString();
-      saveDocument(doc);
+      await saveDocument(doc);
       refresh();
     } catch { /* user cancelled */ }
   };
@@ -94,6 +116,14 @@ export default function HomePage() {
         <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
           <h1 className="text-xl font-bold text-gray-900">CheetSheet</h1>
           <div className="flex items-center gap-2">
+            {isAdmin && (
+              <button
+                onClick={() => router.push('/admin')}
+                className="px-3 py-1.5 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Admin
+              </button>
+            )}
             <button
               onClick={handleImport}
               className="px-3 py-1.5 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
@@ -106,13 +136,24 @@ export default function HomePage() {
             >
               + New Document
             </button>
+            <div className="flex items-center gap-2 pl-3 ml-1 border-l border-gray-200">
+              {email && <span className="text-xs text-gray-400 hidden sm:inline">{email}</span>}
+              <button
+                onClick={signOut}
+                className="px-3 py-1.5 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Sign out
+              </button>
+            </div>
           </div>
         </div>
       </header>
 
       {/* Document grid */}
       <main className="max-w-5xl mx-auto px-6 py-8">
-        {docs.length === 0 ? (
+        {error ? (
+          <div className="text-center py-24 text-sm text-red-500">{error}</div>
+        ) : docs.length === 0 ? (
           <div className="text-center py-24">
             <div className="text-5xl mb-4">📄</div>
             <h2 className="text-lg font-medium text-gray-700 mb-2">No documents yet</h2>
@@ -148,7 +189,7 @@ export default function HomePage() {
                   <div className="h-[120px] bg-white border-b border-gray-100 flex items-center justify-center p-3 overflow-hidden">
                     <div className="w-full h-full bg-gray-50 rounded flex items-start p-2">
                       <div className="space-y-1 w-full">
-                        {doc.pages[0]?.blocks.slice(0, 4).map((block, i) => (
+                        {doc.firstPageBlocks.slice(0, 4).map((block, i) => (
                           <div
                             key={i}
                             className="bg-gray-200 rounded"
@@ -159,7 +200,7 @@ export default function HomePage() {
                             }}
                           />
                         ))}
-                        {(!doc.pages[0] || doc.pages[0].blocks.length === 0) && (
+                        {doc.firstPageBlocks.length === 0 && (
                           <div className="text-xs text-gray-300 text-center pt-6">Empty</div>
                         )}
                       </div>
@@ -174,7 +215,7 @@ export default function HomePage() {
                       </p>
                       <p className="text-xs text-gray-400 mt-0.5">
                         Edited {formatDate(doc.updatedAt)}
-                        {doc.pages.length > 1 && ` · ${doc.pages.length} pages`}
+                        {doc.pageCount > 1 && ` · ${doc.pageCount} pages`}
                       </p>
                     </div>
                     <button

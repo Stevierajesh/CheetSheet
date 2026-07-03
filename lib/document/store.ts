@@ -9,12 +9,18 @@ import {
   PageSize,
   BulletStyle,
 } from '@/types/document';
-import { saveDocument, loadDocumentById, migrateLegacyDocument } from '@/lib/storage/localStorage';
+import {
+  saveDocument,
+  loadDocumentById,
+  migrateLocalDocsToCloud,
+} from '@/lib/storage/supabase';
 import { createSeedDocument } from './seed';
 
 type HistoryEntry = {
   document: DocumentModel;
 };
+
+export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 type EditorState = {
   document: DocumentModel;
@@ -25,6 +31,7 @@ type EditorState = {
   history: HistoryEntry[];
   historyIndex: number;
   isMobileSidebarOpen: boolean;
+  saveStatus: SaveStatus;
 
   // Document actions
   setDocument: (doc: DocumentModel) => void;
@@ -191,11 +198,33 @@ function createDefaultBlock(type: BlockType, page: PageModel): BlockModel {
 
 let saveTimeout: ReturnType<typeof setTimeout> | null = null;
 
+async function performSave(doc: DocumentModel) {
+  useEditorStore.setState({ saveStatus: 'saving' });
+  try {
+    await saveDocument(doc);
+    useEditorStore.setState({ saveStatus: 'saved' });
+  } catch (e) {
+    console.error('Failed to save document:', e);
+    useEditorStore.setState({ saveStatus: 'error' });
+  }
+}
+
+// 1.5s debounce — saves now go over the network, not to localStorage
 function debouncedSave(doc: DocumentModel) {
   if (saveTimeout) clearTimeout(saveTimeout);
   saveTimeout = setTimeout(() => {
-    saveDocument(doc);
-  }, 500);
+    saveTimeout = null;
+    void performSave(doc);
+  }, 1500);
+}
+
+/** Save immediately, cancelling any pending debounce. */
+export function flushPendingSave() {
+  if (saveTimeout) {
+    clearTimeout(saveTimeout);
+    saveTimeout = null;
+  }
+  return performSave(useEditorStore.getState().document);
 }
 
 export const useEditorStore = create<EditorState>((set, get) => ({
@@ -207,6 +236,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   history: [],
   historyIndex: -1,
   isMobileSidebarOpen: false,
+  saveStatus: 'idle',
 
   setDocument: (doc) => {
     set({ document: doc, currentPageIndex: 0, selectedBlockIds: [], history: [], historyIndex: -1 });
@@ -532,21 +562,33 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   toggleMobileSidebar: () => set({ isMobileSidebarOpen: !get().isMobileSidebarOpen }),
 
   save: () => {
-    saveDocument(get().document);
+    void flushPendingSave();
   },
 }));
 
-// Initialize from localStorage — loads a specific document by ID
-export function initializeStore(documentId?: string) {
-  migrateLegacyDocument();
+// Warn before leaving with unsaved changes, and try to flush them
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', (e) => {
+    if (saveTimeout || useEditorStore.getState().saveStatus === 'saving') {
+      void flushPendingSave();
+      e.preventDefault();
+    }
+  });
+}
+
+// Initialize from Supabase — loads a specific document by ID
+export async function initializeStore(documentId?: string): Promise<boolean> {
+  await migrateLocalDocsToCloud().catch((e) =>
+    console.error('Local → cloud migration failed:', e),
+  );
   if (documentId) {
-    const doc = loadDocumentById(documentId);
+    const doc = await loadDocumentById(documentId).catch(() => null);
     if (doc) {
       useEditorStore.getState().setDocument(doc);
-      return;
+      return true;
     }
+    return false; // not found / not yours — caller decides what to show
   }
-  // Fallback: create a new document
-  const doc = createNewDocument();
-  useEditorStore.getState().setDocument(doc);
+  useEditorStore.getState().setDocument(createNewDocument());
+  return true;
 }
